@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "release-msvc",
+      "displayName": "Release (MSVC, vcpkg)",
+      "description": "Single multi-runtime DLL (SE+AE+VR). Requires VCPKG_ROOT and a VS 2022 x64 environment (run from 'x64 Native Tools Command Prompt for VS 2022' or a Developer PowerShell with cl.exe + ninja on PATH).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md"
+      },
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+      "name": "debug-msvc",
+      "displayName": "Debug (MSVC, vcpkg)",
+      "description": "Debug build for development. Same environment requirements as release-msvc.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md"
+      },
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    }
+  ],
+  "buildPresets": [
+    { "name": "release-msvc", "configurePreset": "release-msvc" },
+    { "name": "debug-msvc",   "configurePreset": "debug-msvc" }
+  ]
+}

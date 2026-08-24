@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "npcic",
+  "version-semver": "1.0.0",
+  "description": "NPC IC - view the game from a targeted NPC's first-person perspective.",
+  "supports": "windows & x64",
+  "dependencies": [
+    "directxmath",
+    "directxtk",
+    "fmt",
+    "nlohmann-json",
+    "rapidcsv",
+    "simpleini",
+    "spdlog",
+    "toml11",
+    "xbyak",
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}
