@@ -9,7 +9,7 @@
     *   **Mode 2 (Snap then Handoff, Default)**: Upon entering the viewpoint, the camera first snaps to the NPC's facing direction. When you move the mouse, control smoothly and seamlessly hands off entirely to you for unrestricted mouse look.
 *   **Configurable**: Through the `Data/SKSE/Plugins/NPCIC.ini` file, you can adjust the hotkey, whether to hide the NPC's head, camera offset, Field of View (FOV), auto-target radius, and camera control mode.
 *   **Auto Target**: If the crosshair isn't pointing at any NPC, you can set a search radius to automatically lock onto the nearest NPC.
-*   **Compatibility**: Built on `CommonLibSSE-NG`, a single DLL supports Skyrim SE, AE, and VR.
+*   **Compatibility**: Built on `CommonLibSSE-NG`, a single DLL supports Skyrim SE, AE.
 
 ## Requirements
 *   **Skyrim SE/AE**
