@@ -1,6 +1,7 @@
 # NPC IC - NPC Immersive Camera
 
 **NPC IC** (NPC Immersive Camera) is an SKSE plugin for The Elder Scrolls V: Skyrim Special Edition and Anniversary Edition. It allows you to "possess" any selected NPC's viewpoint with a hotkey, seeing the world through their eyes, and switch between two different camera control modes.
+https://www.nexusmods.com/skyrimspecialedition/mods/189461
 
 ## Main Features
 *   **Toggle Viewpoint**: Aim at any NPC in-game and press the hotkey (default F6) to attach the camera to that NPC's head position.
