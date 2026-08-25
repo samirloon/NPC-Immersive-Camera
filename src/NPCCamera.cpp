@@ -21,6 +21,16 @@ namespace NPCIC
 		// which we invoke first inside the thunk before overriding the camera.
 		REL::Relocation<decltype(NPCCamera::CameraUpdateThunk)> g_origCameraUpdate;
 
+		// Pole-stability caches for ExtractHeadingPitch. They hold the
+		// previous frame's extracted heading so we can freeze heading near
+		// the pitch +/-90deg pole instead of letting atan2(0,noise) produce
+		// a gimbal-lock ~90deg yaw flip. Reset to 0 on every Detach so the
+		// next attach session from a different direction doesn't inherit
+		// stale state. The one-shot "pole first hit" log flag is also reset.
+		float g_prevEngH        = 0.0f;
+		float g_prevHeadH       = 0.0f;
+		bool  g_poleFirstHitLog = false;
+
 		// Returns true if the two rotation matrices differ by more than a
 		// small epsilon in any entry. Used to detect that the player moved
 		// the mouse (the engine recomputed the camera rotation) so we can
@@ -45,14 +55,51 @@ namespace NPCIC
 		// Euler composition order because we read the actual forward vector.
 		// Skyrim convention: +X = right, +Y = forward, +Z = up.
 		// Output angles are in radians.
+		//
+		// GIMBAL-LOCK STABILITY FIX:
+		// Near the pitch poles (forward points almost purely up or purely
+		// down, |fz| ≈ 1) the horizontal projection (fx, fy) collapses to
+		// nearly zero. std::atan2(≈0, ≈0) becomes numerically ill-defined:
+		// even sub-1e-6 floating-point noise between frames can tip the
+		// ratio across a quadrant boundary and produce a +/-90..180 degree
+		// HEADING jump. That manifests as the user-reported bug of "the
+		// camera suddenly twists ~90 degrees on yaw right after I hit the
+		// max pitch stop".
+		//
+		// Workaround: when the horizontal length sqrt(fx^2 + fy^2) is below
+		// a small threshold we simply reuse the caller-supplied
+		// a_prevHeading. This keeps the heading stable through the pole
+		// exactly as it was just before entering degeneracy, which matches
+		// what a player intuitively expects ("don't rotate my yaw just
+		// because I craned my neck up/down as far as it goes").
 		void ExtractHeadingPitch(const RE::NiMatrix3& a_rotate,
-			float& a_outHeading, float& a_outPitch)
+			float& a_outHeading, float& a_outPitch,
+			float a_prevHeading = 0.0f,
+			bool* a_wasAtPole = nullptr)
 		{
 			const float fx = a_rotate.entry[0][1];  // +Y column: forward.x
 			const float fy = a_rotate.entry[1][1];  // forward.y
 			const float fz = a_rotate.entry[2][1];  // forward.z
 
-			a_outHeading = std::atan2(fy, fx);
+			// Horizontal length = "length of the forward vector projected onto
+			// the world XY plane". When this is tiny we're near a pole.
+			const float horizSq = fx * fx + fy * fy;
+			// kPoleThreshold ~= 1.0 deg off pure up/down. At this magnitude
+			// the heading is still visually meaningful (it's the direction
+			// you were looking just before the pole) but below it atan2's
+			// output becomes dominated by floating noise.
+			constexpr float kPoleThreshSq = 0.0003046f;  // = (sin(1 deg))^2
+			const bool atPole = (horizSq < kPoleThreshSq);
+			if (a_wasAtPole) *a_wasAtPole = atPole;
+
+			if (atPole) {
+				// At / near the pole: preserve whichever heading we had the
+				// frame before. Pitch is still correct (it's pure asin(fz)).
+				a_outHeading = a_prevHeading;
+			}
+			else {
+				a_outHeading = std::atan2(fy, fx);
+			}
 
 			// Clamp to [-1, 1] to avoid NaN from asin due to floating drift.
 			const float fzClamped = std::clamp(fz, -1.0f, 1.0f);
@@ -85,7 +132,7 @@ namespace NPCIC
 			rx.MakeXRotation(a_pitchRad);
 			return rz * a_base * rx;
 		}
-	}
+	}  // close anonymous namespace inside NPCIC
 
 	RE::NiAVObject* NPCCamera::GetHeadNode(RE::Actor* a_actor) const
 	{
@@ -204,6 +251,13 @@ namespace NPCIC
 	void NPCCamera::Detach()
 	{
 		std::lock_guard<std::mutex> guard(lock);
+		// Reset pole-stability heading caches + first-hit log flag at the
+		// start of every Detach (both paths below) so the next attach
+		// session always boots with clean Euler state instead of inheriting
+		// a value frozen at the previous session's pitch pole.
+		g_prevEngH        = 0.0f;
+		g_prevHeadH       = 0.0f;
+		g_poleFirstHitLog = false;
 		if (!attached) {
 			RestoreFOV();
 			target.reset();
@@ -371,21 +425,57 @@ namespace NPCIC
 		const RE::NiMatrix3 engineRotate = root->world.rotate;
 		const RE::NiMatrix3 headRotate = head->world.rotate;
 
-		// Extract engine heading/pitch from the engine-computed forward
-		// vector. These angles are the pure consequence of player mouse
-		// input plus the engine's own baseline; we only ever DIFFERENCE
-		// them, never take them as absolute, so no composition-order bug.
+		// ---- Heading/pitch extraction with pole-stability fix --------------
+		//
+		// We now pass the PREVIOUS frame's heading value back into
+		// ExtractHeadingPitch so when the camera forward vector lands on
+		// or very near the +/-world-Z pole (straight up or straight down)
+		// the function will REUSE that stable heading instead of computing
+		// atan2(≈0,≈0) from a degenerate horizontal projection. This
+		// eliminates the gimbal-lock ~90° yaw flip the user reported right
+		// after craning pitch to the engine's max look-up/down limit.
+		//
+		// The "prev" values are stored in frame-static storage. They are
+		// valid across an attach session: Detach() resets them and the
+		// pole-logic one-shot flag below so the next attach session from
+		// a different direction does not reuse stale headings.
+		// (g_prevEngH, g_prevHeadH, g_poleFirstHitLog live in the file-scope
+		// anonymous namespace and are zeroed by Detach() each session.)
+
 		float engH = 0.0f;
 		float engP = 0.0f;
-		ExtractHeadingPitch(engineRotate, engH, engP);
+		bool  engAtPole = false;
+		ExtractHeadingPitch(engineRotate, engH, engP,
+			haveLastEngineAngles ? lastEngineHeading : g_prevEngH,
+			&engAtPole);
 
-		// Heading/pitch of the live NPC head node in world space. This is
-		// the reference orientation both modes work from (mode 1 reads it
-		// every frame, mode 2 reads it during the snap phase and freezes
-		// a snapshot at handoff). Logged for diagnosing Mode-1 tracking.
 		float headH = 0.0f;
 		float headP = 0.0f;
-		ExtractHeadingPitch(headRotate, headH, headP);
+		bool  headAtPole = false;
+		ExtractHeadingPitch(headRotate, headH, headP, g_prevHeadH, &headAtPole);
+
+		// One-shot per-session warning when we first hit the pole so the
+		// log proves the fix is engaged (useful to correlate reports).
+		if (!g_poleFirstHitLog && (engAtPole || headAtPole) &&
+			Settings::Debug.GetValue()) {
+			g_poleFirstHitLog = true;
+			SKSE::log::info(
+				"ApplyCameraTransform: pitch pole reached (eng at pole={},"
+				" head at pole={}). Heading has been frozen at last good value"
+				" to prevent gimbal-lock yaw flip.",
+				engAtPole, headAtPole);
+		}
+
+		// Update previous-frame heading caches for the next iteration.
+		g_prevEngH  = engH;
+		g_prevHeadH = headH;
+
+		// NOTE: lastEngineHeading/Pitch are intentionally NOT refreshed here.
+		// Mode 2's snap phase needs to compare "this frame eng H/P" against
+		// "last frame lastEngine H/P" to detect mouse movement; if we set
+		// last = current before Mode 2 runs, AngleDiff() would always read
+		// 0 and handoff would never fire. We refresh lastEngine H/P at the
+		// very bottom of ApplyCameraTransform instead.
 
 		// --- Debug-only throttled telemetry (1 line per ~180 frames).
 		//     When bDebug=1 and the user suspects rotation tracking is
@@ -592,6 +682,15 @@ namespace NPCIC
 			SKSE::log::info("ApplyCameraTransform: anchored to head world=({:.2f}, {:.2f}, {:.2f})",
 				head->world.translate.x, head->world.translate.y, head->world.translate.z);
 		}
+
+		// Now that Mode 2's per-frame handoff detection has compared
+		// engH/engP against LAST frame's lastEngine H/P, record this
+		// frame's values for next time. We do this unconditionally so
+		// cross-mode transitions (e.g. attach in Mode 1 -> detach -> next
+		// attach in Mode 2) don't start with stale baselines.
+		lastEngineHeading = engH;
+		lastEnginePitch   = engP;
+		haveLastEngineAngles = true;
 	}
 
 	void NPCCamera::CameraUpdateThunk(RE::TESCamera* a_camera)
